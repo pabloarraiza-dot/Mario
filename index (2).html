@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Dark Mario Style</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050505;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: white;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+        }
+        #gameContainer {
+            position: relative;
+            width: 800px;
+            height: 400px;
+            box-shadow: 0 0 30px rgba(139, 0, 0, 0.4);
+            border: 2px solid #333;
+        }
+        canvas {
+            display: block;
+            background-color: #1a1a2e;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+            z-index: 10;
+        }
+        h2 { margin: 0; font-size: 20px; text-shadow: 2px 2px 4px #000; }
+        
+        /* Menú de Inicio */
+        #menu {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(to bottom, #111, #2b0000);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+        }
+        #menu h1 {
+            font-size: 40px;
+            color: #ff3333;
+            text-shadow: 0 0 10px #ff0000;
+            margin-bottom: 40px;
+        }
+        .btn {
+            background-color: #000;
+            color: #fff;
+            border: 2px solid #550000;
+            padding: 15px 30px;
+            margin: 10px;
+            font-size: 18px;
+            font-family: 'Courier New', Courier, monospace;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        .btn:hover {
+            background-color: #550000;
+            box-shadow: 0 0 15px #ff0000;
+        }
+    </style>
+</head>
+<body>
+
+<div id="gameContainer">
+    <!-- Interfaz del Juego -->
+    <div id="ui" style="display: none;">
+        <h2 id="scoreDisplay">Score: 0</h2>
+        <h2 id="msgDisplay"></h2>
+    </div>
+
+    <!-- Menú Principal -->
+    <div id="menu">
+        <h1>DARK MARIO</h1>
+        <button class="btn" id="btnNewGame">Juego Nuevo</button>
+        <button class="btn" id="btnLoadGame">Cargar Partida</button>
+        <button class="btn" id="btnSaveGame" style="display: none;">Guardar Partida</button>
+    </div>
+
+    <canvas id="gameCanvas" width="800" height="400"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const menu = document.getElementById('menu');
+    const ui = document.getElementById('ui');
+    const scoreDisplay = document.getElementById('scoreDisplay');
+    const msgDisplay = document.getElementById('msgDisplay');
+    const btnSaveGame = document.getElementById('btnSaveGame');
+
+    // SISTEMA DE AUDIO (Web Audio API)
+    let audioCtx;
+    let musicInterval;
+
+    function initAudio() {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+    }
+
+    function playJumpSound() {
+        if (!audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        // Sonido ascendente tipo Mario
+        osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.2);
+        
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+        
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.2);
+    }
+
+    function playStompSound() {
+        if (!audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'square';
+        // Sonido crujiente/muerte
+        osc.frequency.setValueAtTime(100, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(10, audioCtx.currentTime + 0.15);
+        
+        gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+        
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.15);
+    }
+
+    function startBackgroundMusic() {
+        if (!audioCtx) return;
+        stopBackgroundMusic();
+        // Ritmo oscuro repetitivo
+        musicInterval = setInterval(() => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(55, audioCtx.currentTime); // Nota grave
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.5);
+        }, 1000);
+    }
+
+    function stopBackgroundMusic() {
+        if (musicInterval) clearInterval(musicInterval);
+    }
+
+    // VARIABLES DEL JUEGO
+    let gameState = 'MENU'; // MENU, PLAYING, GAMEOVER
+    let score = 0;
+    let animationId;
+    const gravity = 0.6;
+
+    const keys = { a: false, d: false, w: false, space: false };
+
+    let player = {};
+    let bricks = [];
+    let enemies = [];
+    const flag = { x: 730, y: 100, w: 10, h: 250 };
+
+    // INICIALIZAR NIVEL
+    function initLevel(savedScore = 0) {
+        score = savedScore;
+        scoreDisplay.innerText = "Score: " + score;
+        msgDisplay.innerText = "";
+        
+        player = {
+            x: 50, y: 300, width: 24, height: 32,
+            vx: 0, vy: 0, speed: 4.5, jumpPower: -11,
+            grounded: false
+        };
+
+        bricks = [
+            { x: 0, y: 350, w: 800, h: 50 }, // Suelo
+            { x: 200, y: 250, w: 100, h: 20 },
+            { x: 350, y: 160, w: 100, h: 20 },
+            { x: 550, y: 250, w: 100, h: 20 }
+        ];
+
+        enemies = [
+            { x: 250, y: 320, width: 24, height: 24, vx: 1, type: 'mushroom', dead: false },
+            { x: 400, y: 320, width: 24, height: 24, vx: -1, type: 'turtle', dead: false },
+            { x: 600, y: 220, width: 24, height: 24, vx: 1, type: 'mushroom', dead: false }
+        ];
+    }
+
+    // CONTROLES
+    window.addEventListener('keydown', e => {
+        if(e.key.toLowerCase() === 'a') keys.a = true;
+        if(e.key.toLowerCase() === 'd') keys.d = true;
+        if(e.key.toLowerCase() === 'w') keys.w = true;
+        if(e.key === ' ') keys.space = true;
+    });
+    window.addEventListener('keyup', e => {
+        if(e.key.toLowerCase() === 'a') keys.a = false;
+        if(e.key.toLowerCase() === 'd') keys.d = false;
+        if(e.key.toLowerCase() === 'w') keys.w = false;
+        if(e.key === ' ') keys.space = false;
+    });
+
+    // SISTEMA DE GUARDADO
+    document.getElementById('btnSaveGame').addEventListener('click', () => {
+        const saveData = { score: score };
+        localStorage.setItem('darkMarioSave', JSON.stringify(saveData));
+        alert("¡Partida Guardada! Score: " + score);
+        showMenu();
+    });
+
+    document.getElementById('btnLoadGame').addEventListener('click', () => {
+        const saved = localStorage.getItem('darkMarioSave');
+        if (saved) {
+            const data = JSON.parse(saved);
+            startGame(data.score);
+        } else {
+            alert("No hay partida guardada.");
+        }
+    });
+
+    document.getElementById('btnNewGame').addEventListener('click', () => {
+        startGame(0);
+    });
+
+    function showMenu() {
+        gameState = 'MENU';
+        menu.style.display = 'flex';
+        ui.style.display = 'none';
+        btnSaveGame.style.display = 'none';
+        stopBackgroundMusic();
+        cancelAnimationFrame(animationId);
+    }
+
+    function startGame(startingScore) {
+        initAudio();
+        startBackgroundMusic();
+        initLevel(startingScore);
+        gameState = 'PLAYING';
+        menu.style.display = 'none';
+        ui.style.display = 'flex';
+        btnSaveGame.style.display = 'block';
+        gameLoop();
+    }
+
+    // DIBUJO DEL ENTORNO
+    function drawEnvironment() {
+        // Cielo
+        let grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        grad.addColorStop(0, "#0a0a1a");
+        grad.addColorStop(1, "#1a1a2e");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Sol Oscuro
+        ctx.beginPath();
+        ctx.arc(650, 80, 40, 0, Math.PI * 2);
+        ctx.fillStyle = "#8a0303";
+        ctx.fill();
+
+        // Nubes (Siluetas)
+        ctx.fillStyle = "#202030";
+        ctx.beginPath(); ctx.arc(150, 100, 30, 0, Math.PI*2); ctx.arc(180, 90, 40, 0, Math.PI*2); ctx.arc(220, 100, 30, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(450, 130, 25, 0, Math.PI*2); ctx.arc(480, 120, 35, 0, Math.PI*2); ctx.arc(520, 130, 25, 0, Math.PI*2); ctx.fill();
+
+        // Árboles oscuros
+        ctx.fillStyle = "#0d0d14";
+        ctx.fillRect(100, 270, 15, 80);
+        ctx.beginPath(); ctx.moveTo(107, 200); ctx.lineTo(70, 280); ctx.lineTo(145, 280); ctx.fill();
+
+        // Bandera
+        ctx.fillStyle = '#444';
+        ctx.fillRect(flag.x, flag.y, flag.w, flag.h);
+        ctx.fillStyle = '#660000';
+        ctx.fillRect(flag.x - 40, flag.y + 10, 40, 30);
+
+        // Ladrillos con textura
+        bricks.forEach(b => {
+            ctx.fillStyle = '#2a2a2a';
+            ctx.fillRect(b.x, b.y, b.w, b.h);
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(b.x, b.y, b.w, b.h);
+            for(let i = b.x; i < b.x + b.w; i += 20) {
+                for(let j = b.y; j < b.y + b.h; j += 10) {
+                    ctx.strokeRect(i, j, 20, 10);
+                }
+            }
+        });
+    }
+
+    // LOGICA PRINCIPAL
+    function updatePlayer() {
+        if (keys.a) player.vx = -player.speed;
+        else if (keys.d) player.vx = player.speed;
+        else player.vx = 0;
+
+        if ((keys.w || keys.space) && player.grounded) {
+            player.vy = player.jumpPower;
+            player.grounded = false;
+            playJumpSound(); // Reproducir sonido de salto
+        }
+
+        player.vy += gravity;
+        player.x += player.vx;
+        player.y += player.vy;
+
+        // Limites del mapa
+        if(player.x < 0) player.x = 0;
+        if(player.x + player.width > canvas.width) player.x = canvas.width - player.width;
+
+        // Colisiones con bloques
+        player.grounded = false;
+        for (let b of bricks) {
+            if (player.x < b.x + b.w && player.x + player.width > b.x &&
+                player.y < b.y + b.h && player.y + player.height > b.y) {
+                
+                // Arriba del bloque
+                if (player.vy > 0 && player.y + player.height - player.vy <= b.y + 5) {
+                    player.grounded = true;
+                    player.vy = 0;
+                    player.y = b.y - player.height;
+                } 
+                // Golpeando abajo del bloque
+                else if (player.vy < 0 && player.y - player.vy >= b.y + b.h - 5) {
+                    player.vy = 0;
+                    player.y = b.y + b.h;
+                }
+            }
+        }
+
+        // Caer al vacío
+        if (player.y > canvas.height) triggerGameOver("CONSUMIDO POR LA OSCURIDAD", "#ff0000");
+    }
+
+    function updateEnemies() {
+        enemies.forEach(e => {
+            if(e.dead) return;
+            e.x += e.vx;
+            
+            // Gravedad del enemigo
+            e.y += gravity * 2;
+            for (let b of bricks) {
+                if (e.x < b.x + b.w && e.x + e.width > b.x &&
+                    e.y < b.y + b.h && e.y + e.height > b.y) {
+                    e.y = b.y - e.height;
+                    // Patrulla: rebotar en los bordes del bloque
+                    if(e.x <= b.x || e.x + e.width >= b.x + b.w) e.vx *= -1;
+                }
+            }
+
+            // Colisión con el Jugador
+            if (player.x < e.x + e.width && player.x + player.width > e.x &&
+                player.y < e.y + e.height && player.y + player.height > e.y) {
+                
+                // Jugador aplasta al enemigo
+                if (player.vy > 0 && player.y + player.height - player.vy <= e.y + 15) {
+                    e.dead = true;
+                    player.vy = -8; // Rebote
+                    score += 100;
+                    scoreDisplay.innerText = "Score: " + score;
+                    playStompSound(); // Sonido de muerte del enemigo
+                } else {
+                    // Jugador choca de lado
+                    triggerGameOver("HAS MUERTO", "#ff0000");
+                }
+            }
+        });
+    }
+
+    function drawEntities() {
+        // Dibujar Jugador (Mario Oscuro)
+        ctx.fillStyle = '#3b0066';
+        ctx.fillRect(player.x, player.y, player.width, player.height);
+        ctx.fillStyle = '#ff0000'; // Ojos rojos
+        let dir = keys.a ? 2 : 12;
+        ctx.fillRect(player.x + dir, player.y + 6, 4, 4);
+        ctx.fillRect(player.x + dir + 8, player.y + 6, 4, 4);
+
+        // Dibujar Enemigos
+        enemies.forEach(e => {
+            if(e.dead) return;
+            ctx.fillStyle = e.type === 'mushroom' ? '#4a2323' : '#234a23';
+            ctx.fillRect(e.x, e.y, e.width, e.height);
+            ctx.fillStyle = '#a8ff22';
+            ctx.fillRect(e.x + (e.vx > 0 ? 12 : 4), e.y + 6, 4, 4);
+        });
+    }
+
+    function checkWin() {
+        if (player.x < flag.x + flag.w && player.x + player.width > flag.x &&
+            player.y < flag.y + flag.h && player.y + player.height > flag.y) {
+            triggerGameOver("NIVEL COMPLETADO", "#00ff00");
+        }
+    }
+
+    function triggerGameOver(msg, color) {
+        gameState = 'GAMEOVER';
+        msgDisplay.innerText = msg;
+        msgDisplay.style.color = color;
+        stopBackgroundMusic();
+        
+        setTimeout(() => {
+            showMenu();
+        }, 3000);
+    }
+
+    function gameLoop() {
+        if (gameState !== 'PLAYING') return;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        drawEnvironment();
+        updatePlayer();
+        updateEnemies();
+        drawEntities();
+        checkWin();
+
+        animationId = requestAnimationFrame(gameLoop);
+    }
+</script>
+
+</body>
+</html>
